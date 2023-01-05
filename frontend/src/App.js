@@ -186,7 +186,7 @@ function App() {
       <WRInfo chain="Goerli" testnet={true} />
       <WRContent>
         
-        <h1>DAO</h1>
+        <h1>LOAN STATE MACHINE</h1>
         {loading && 
           <h1>Loading....</h1>
         }
