@@ -7,16 +7,24 @@ import { ethers } from "ethers";
 import {ToastContainer, toast} from "react-toastify";
 
 import WRHeader from 'wrcomponents/dist/WRHeader';
-import WRFooter from 'wrcomponents/dist/WRFooter';
+import WRFooter, { async } from 'wrcomponents/dist/WRFooter';
 import WRInfo from 'wrcomponents/dist/WRInfo';
 import WRContent from 'wrcomponents/dist/WRContent';
 import WRTools from 'wrcomponents/dist/WRTools';
+import Button from "react-bootstrap/Button";
+
+import { format6FirstsAnd6LastsChar, formatDate } from "./utils";
+import meta from "./assets/metamask.png";
 
 import LSMContract from './artifacts/contracts/LoanStateMachine.sol/LoanStateMachine.json';
 
 function App() {
 
-  const [userAccount, setUserAccount] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState({});
+  const [provider, setProvider] = useState();
+  const [contract, setContract] = useState();
+  const [signer, setSigner] = useState();
 
   const [state, setState] = useState('');
   const [amount, setAmount] = useState('');
@@ -26,130 +34,188 @@ function App() {
   const [lender, setLender] = useState('');
 
 
-  const addressContract = '0x01d2f1e45d395aEe8b200E2Fa9F7B40e2fA8FEdd';
+  const contractAddress = '0x01d2f1e45d395aEe8b200E2Fa9F7B40e2fA8FEdd';
   
-  let contractDeployed = null;
-  let contractDeployedSigner = null;
-  
-  async function getProvider(connect = false){
-    const provider = new ethers.providers.Web3Provider(window.ethereum);
-    if (contractDeployed == null){
-      contractDeployed = new ethers.Contract(addressContract, LSMContract.abi, provider)
-    }
-    if (contractDeployedSigner == null){
-      if (connect){
-        let userAcc = await provider.send('eth_requestAccounts', []);
-        setUserAccount(userAcc[0]);
+
+  async function handleConnectWallet (){
+    try {
+      setLoading(true)
+      let userAcc = await provider.send('eth_requestAccounts', []);
+      setUser({account: userAcc[0], connected: true});
+
+      const contrSig = new ethers.Contract(contractAddress, LSMContract.abi, provider.getSigner())
+      setSigner( contrSig)
+
+    } catch (error) {
+      if (error.message == 'provider is undefined'){
+        toastMessage('No provider detected.')
+      } else if(error.code === -32002){
+        toastMessage('Check your metamask')
       }
-      contractDeployedSigner = new ethers.Contract(addressContract, LSMContract.abi, provider.getSigner());
+    } finally{
+      setLoading(false);
     }
   }
 
   useEffect(() => {
-    getData()
-  }, [])
+    
+    async function getData() {
+      try {
+        const {ethereum} = window;
+        if (!ethereum){
+          toastMessage('Metamask not detected');
+          return
+        }
+  
+        const prov =  new ethers.providers.Web3Provider(window.ethereum);
+        setProvider(prov);
 
-  async function disconnect(){
-    try {
-      setUserAccount('');
-    } catch (error) {
+        const contr = new ethers.Contract(contractAddress, LSMContract.abi, prov);
+        setContract(contr);
+        
+        if (! await isGoerliTestnet()){
+          toastMessage('Change to goerli testnet.')
+          return;
+        }
+
+        //contract data
+        setAmount((await contr.amount()).toString())
+        setBorrower((await contr.borrower()).toString())
+        let dateEnd =  (await contr.end()).toString()
+        setEnd( formatDate( dateEnd))
+        setInterest((await contr.interest()).toString())
+        setLender((await contr.lender()).toString())
+        let state = (await contr.state()).toString();
+        if (state == 0 ){
+          setState("Pending")
+        } else if (state == 1 ){
+          setState("Active")
+        } else if (state == 2 ){
+          setState("Closed")
+        }  
+  
+        toastMessage('Data loaded')
+        
+      } catch (error) {
+        toastMessage(error.reason)        
+      }
       
     }
+
+    getData()  
+    
+  }, [])
+  
+  function isConnected(){
+    if (!user.connected){
+      toastMessage('You are not connected!')
+      return false;
+    }
+    
+    return true;
   }
 
-  function formatDate(dateTimestamp){
-    let date = new Date(parseInt(dateTimestamp));
-    let dateFormatted = date.getDate() + "/" + (date.getMonth() + 1) + "/" + date.getFullYear() + "  " + date.getHours() + ":" + date.getMinutes();
-    return dateFormatted;
+  async function isGoerliTestnet(){
+    const goerliChainId = "0x5";
+    const respChain = await getChain();
+    return goerliChainId == respChain;
+  }
+
+  async function getChain() {
+    const currentChainId = await  window.ethereum.request({method: 'eth_chainId'})
+    return currentChainId;
+  }
+
+  async function handleDisconnect(){
+    try {
+      setUser({});
+      setSigner(null);
+    } catch (error) {
+      toastMessage(error.reason)
+    }
   }
 
   function toastMessage(text) {
     toast.info(text)  ;
   }
 
-  function toTimestamp(strDate){
-    var datum = Date.parse(strDate);
-    return datum;
-  }
-
-  async function getData(connect = false) {
-    await getProvider(connect);
-    setAmount((await contractDeployed.amount()).toString())
-    setBorrower((await contractDeployed.borrower()).toString())
-    let dateEnd =  (await contractDeployed.end()).toString()
-    setEnd( formatDate( dateEnd))
-    setInterest((await contractDeployed.interest()).toString())
-    setLender((await contractDeployed.lender()).toString())
-    let state = (await contractDeployed.state()).toString();
-    if (state == 0 ){
-      setState("Pending")
-    } else if (state == 1 ){
-      setState("Active")
-    } else if (state == 2 ){
-      setState("Closed")
-    }
-    
-  }
-
-  async function handleFund(){
-    await getProvider(true);
+  async function executeSigner(func, successMessage){
     try {
-      const resp  = await contractDeployedSigner.fund({value: amount});  
-      console.log(resp);
-      toastMessage("Funded.")
+      if (!isConnected()) {
+        return;
+      }
+      if (! await isGoerliTestnet()){
+        toastMessage('Change to goerli testnet.')
+        return;
+      }
+      setLoading(true);
+      const resp  = await func;  
+      toastMessage("Please wait.")
+      await resp.wait();
+      toastMessage(successMessage)
     } catch (error) {
-      toastMessage(error.reason);
+      toastMessage(error.reason)      
+    } finally{
+      setLoading(false);
     }
   }
-
-  async function handleReimburse(){
-    await getProvider(true);
-    try {
-      const totalValue = parseInt( amount) + parseInt( interest);
-      console.log(totalValue);
-      const resp  = await contractDeployedSigner.reimburse({value: totalValue});  
-      toastMessage("Reimbursed.")
-    } catch (error) {
-      toastMessage(error.reason);
+  
+  function handleFund(){
+    if (signer === undefined){
+      toastMessage("Please, connect your metamask")
+      return
     }
+    const func = signer.fund({value: amount})
+    executeSigner(func, "Funded.")
+  }
+
+  function handleReimburse(){
+    if (signer === undefined){
+      toastMessage("Please, connect your metamask")
+      return
+    }
+    const totalValue = Number( amount) + Number( interest);
+    const func = signer.reimburse({value: totalValue});  
+    executeSigner(func, "Reimbursed.")
   }
 
   return (
     <div className="App">
       <ToastContainer position="top-center" autoClose={5000}/>
       <WRHeader title="LOAN STATE MACHINE" image={true} />
-      <WRInfo chain="Goerli testnet" />
+      <WRInfo chain="Goerli" testnet={true} />
       <WRContent>
         
-        {
-          userAccount =='' ?<>
-            <h2>Connect your wallet</h2>
-            <button onClick={() => getData(true)}>Connect</button>
-          </>
-          :(<>
-            <h2>User data</h2>
-            <p>User account: {userAccount}</p>
-            <button onClick={disconnect}>Disconnect</button></>)
+        <h1>DAO</h1>
+        {loading && 
+          <h1>Loading....</h1>
         }
-        
+        { !user.connected ?<>
+            <Button className="commands" variant="btn btn-primary" onClick={handleConnectWallet}>
+              <img src={meta} alt="metamask" width="30px" height="30px"/>Connect to Metamask
+            </Button></>
+          : <>
+            <label>Welcome {format6FirstsAnd6LastsChar(user.account)}</label>
+            <button className="btn btn-primary commands" onClick={handleDisconnect}>Disconnect</button>
+          </>
+        }
+
         <hr/>
         <h2>Contract data</h2>
-        <p>State: {state}</p>
-        <p>Amount: {amount}</p>
-        <p>Interest: {interest}</p>
-        <p>End: {end}</p>
-        <p>Lender: {lender}</p>
-        <p>Borrower: {borrower}</p>
-
-        
+        <label>State: {state}</label>
+        <label>Amount: {amount}</label>
+        <label>Interest: {interest}</label>
+        <label>End: {end}</label>
+        <label>Lender: {format6FirstsAnd6LastsChar(lender)}</label>
+        <label>Borrower: {format6FirstsAnd6LastsChar(borrower)}</label>
         <hr/>
 
-        <h2>Fund</h2>
-        <button onClick={handleFund}>Click to fund</button>
+        <h2>Fund (only lender)</h2>
+        <button className="btn btn-primary commands" onClick={handleFund}>Click to fund</button>
         <hr/>
 
-        <h2>Reimburse</h2>
-        <button onClick={handleReimburse}>Click to Reimburse</button>
+        <h2>Reimburse (only borrower)</h2>
+        <button className="btn btn-primary commands" onClick={handleReimburse}>Click to Reimburse</button>
         <hr/>
         
       </WRContent>

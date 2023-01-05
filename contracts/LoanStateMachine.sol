@@ -13,8 +13,8 @@ contract LoanStateMachine {
     uint public interest;
     uint public end;
     uint public duration;
-    address payable public borrower; //quem pega emprestado
-    address payable public lender; //quem empresta
+    address payable public borrower; 
+    address payable public lender; 
 
     constructor(uint _amount, uint _interest, uint _duration, address payable _borrower, address payable _lender){
         amount = _amount;
